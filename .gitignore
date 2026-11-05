@@ -1,0 +1,10 @@
+# Build output
+build/
+cmake-build-*/
+*.o
+term3d
+
+# Editor / OS clutter
+.vscode/
+.idea/
+.DS_Store
