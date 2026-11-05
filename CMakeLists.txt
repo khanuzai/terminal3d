@@ -14,6 +14,8 @@ endif()
 add_executable(term3d
     src/main.cpp
     src/obj_loader.cpp
+    src/framebuffer.cpp
+    src/terminal.cpp
 )
 
 # Turn on the useful warnings so the compiler can catch mistakes for us.
