@@ -16,3 +16,8 @@ struct Mesh {
     std::vector<Vec3> vertices;
     std::vector<Triangle> triangles;
 };
+
+// Returns a transform that centers the mesh on the origin and scales it to fit
+// inside a sphere of radius 1. Models come in wildly different sizes and
+// positions; this makes every one of them fit the same camera setup.
+Mat4 fitToUnitSphere(const Mesh& mesh);

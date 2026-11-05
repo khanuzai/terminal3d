@@ -14,6 +14,8 @@ endif()
 add_executable(term3d
     src/main.cpp
     src/obj_loader.cpp
+    src/mesh.cpp
+    src/renderer.cpp
     src/framebuffer.cpp
     src/terminal.cpp
 )
