@@ -17,6 +17,27 @@ TermSize terminalSize();
 // terminal from showing a half-drawn picture.
 void writeToTerminal(const std::string& data);
 
+// Writes one complete frame, wrapped in "synchronized output" markers. Terminals
+// that support them (iTerm2, kitty, WezTerm, Alacritty, foot, ...) hold the
+// screen still until the whole frame has arrived and then show it at once,
+// which removes any remaining tearing. Other terminals ignore the markers.
+void presentFrame(const std::string& frame);
+
+// Erases the whole screen. Needed after a resize, when the old frame's
+// layout no longer lines up with the new size.
+void clearTerminal();
+
+// Installs handlers for Ctrl+C (SIGINT), SIGTERM and window resizes (SIGWINCH).
+// The handlers only set flags; the main loop checks them with the functions
+// below and reacts in normal code, where it's safe to do anything.
+void installSignalHandlers();
+
+// True once Ctrl+C or SIGTERM has been received.
+bool quitRequested();
+
+// True if the window was resized since the last call. Calling it clears the flag.
+bool consumeResize();
+
 // RAII guard for the terminal's state. Creating one switches to the
 // "alternate screen" (a separate full-screen buffer, which is what vim and htop
 // use) and hides the cursor. Destroying it undoes both, so the user's shell

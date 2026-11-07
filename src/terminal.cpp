@@ -1,6 +1,7 @@
 #include "terminal.h"
 
 #include <cerrno>
+#include <csignal>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -13,6 +14,17 @@ constexpr const char* kLeaveAltScreen = "\x1b[?1049l";
 constexpr const char* kHideCursor     = "\x1b[?25l";
 constexpr const char* kShowCursor     = "\x1b[?25h";
 constexpr const char* kClearScreen    = "\x1b[2J";
+constexpr const char* kBeginSync      = "\x1b[?2026h";
+constexpr const char* kEndSync        = "\x1b[?2026l";
+
+// Flags set by the signal handlers. A signal can arrive between any two
+// instructions of the program, so a handler may only do a tiny set of
+// "async-signal-safe" things. Writing a volatile sig_atomic_t is one of them.
+volatile std::sig_atomic_t gQuitRequested = 0;
+volatile std::sig_atomic_t gResized = 0;
+
+void onQuitSignal(int) { gQuitRequested = 1; }
+void onResizeSignal(int) { gResized = 1; }
 
 } // namespace
 
@@ -41,6 +53,38 @@ void writeToTerminal(const std::string& data) {
         p += n;
         left -= static_cast<std::size_t>(n);
     }
+}
+
+void presentFrame(const std::string& frame) {
+    writeToTerminal(kBeginSync + frame + kEndSync);
+}
+
+void clearTerminal() {
+    writeToTerminal(kClearScreen);
+}
+
+void installSignalHandlers() {
+    struct sigaction sa {};
+    sigemptyset(&sa.sa_mask);
+
+    sa.sa_handler = onQuitSignal;
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+
+    sa.sa_handler = onResizeSignal;
+    sigaction(SIGWINCH, &sa, nullptr);
+}
+
+bool quitRequested() {
+    return gQuitRequested != 0;
+}
+
+bool consumeResize() {
+    if (!gResized) return false;
+    // Clear the flag *before* the caller reads the new size: if another resize
+    // arrives right after this, the flag gets set again and we catch it next frame.
+    gResized = 0;
+    return true;
 }
 
 TerminalSession::TerminalSession() {
