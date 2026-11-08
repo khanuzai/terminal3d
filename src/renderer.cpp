@@ -1,5 +1,6 @@
 #include "renderer.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <vector>
@@ -7,9 +8,12 @@
 namespace {
 
 // Where a vertex lands on the screen, and whether it can be drawn at all.
+// x and y are in cells but kept as floats, so triangle edges can fall between
+// cell centers. z is the depth: -1 at the near plane up to 1 at the far plane.
 struct ScreenPoint {
-    int x = 0;
-    int y = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
     bool visible = false;
 };
 
@@ -29,10 +33,22 @@ ScreenPoint projectToScreen(const Vec3& p, const Mat4& mvp, int width, int heigh
     // Map -1..1 to 0..width and 0..height. Screen y grows downward but NDC y
     // grows upward, hence the (1 - ndcY).
     ScreenPoint s;
-    s.x = static_cast<int>(std::floor((ndcX + 1.0f) * 0.5f * width));
-    s.y = static_cast<int>(std::floor((1.0f - ndcY) * 0.5f * height));
+    s.x = (ndcX + 1.0f) * 0.5f * width;
+    s.y = (1.0f - ndcY) * 0.5f * height;
+    s.z = clip.z / clip.w;
     s.visible = true;
     return s;
+}
+
+// Projects each vertex once. A vertex is shared by several triangles, so this
+// is much cheaper than projecting the corners of every triangle separately.
+std::vector<ScreenPoint> projectVertices(const Mesh& mesh, const Mat4& mvp, int width, int height) {
+    std::vector<ScreenPoint> points;
+    points.reserve(mesh.vertices.size());
+    for (const Vec3& v : mesh.vertices) {
+        points.push_back(projectToScreen(v, mvp, width, height));
+    }
+    return points;
 }
 
 // Picks the ASCII character that best matches a line's direction on screen.
@@ -45,6 +61,57 @@ char lineChar(int dx, int dy) {
     if (ax < ay * 0.5f) return '|';
     // Screen y points down, so "right and down" is a backslash.
     return (dx > 0) == (dy > 0) ? '\\' : '/';
+}
+
+// The "edge function": tells which side of the line a->b the point p is on.
+// It's positive on one side, negative on the other, and zero on the line.
+// Its value is also twice the signed area of the triangle (a, b, p), which is
+// what makes it useful for barycentric coordinates below.
+float edgeFunction(const ScreenPoint& a, const ScreenPoint& b, float px, float py) {
+    return (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x);
+}
+
+// Fills one triangle into the framebuffer, depth-tested.
+// Returns false if the triangle was culled because it faces away from us.
+bool fillTriangle(Framebuffer& fb, const ScreenPoint& a, const ScreenPoint& b,
+                  const ScreenPoint& c, char ch) {
+    // Signed area of the whole triangle. Our models list corners
+    // counter-clockwise as seen from the front, but screen y points down,
+    // which mirrors the picture: so front-facing triangles come out with
+    // *negative* area here. Zero area means the triangle is seen edge-on.
+    const float area = edgeFunction(a, b, c.x, c.y);
+    if (area >= 0.0f) return false;
+
+    // Only test cells inside the triangle's bounding box, clamped to the screen.
+    const int minX = std::max(0, static_cast<int>(std::floor(std::min({a.x, b.x, c.x}))));
+    const int maxX = std::min(fb.width() - 1, static_cast<int>(std::floor(std::max({a.x, b.x, c.x}))));
+    const int minY = std::max(0, static_cast<int>(std::floor(std::min({a.y, b.y, c.y}))));
+    const int maxY = std::min(fb.height() - 1, static_cast<int>(std::floor(std::max({a.y, b.y, c.y}))));
+
+    for (int y = minY; y <= maxY; ++y) {
+        for (int x = minX; x <= maxX; ++x) {
+            // Sample at the center of the cell.
+            const float px = x + 0.5f;
+            const float py = y + 0.5f;
+
+            // Barycentric coordinates: how much each corner "owns" this point.
+            // Each is the area of the small triangle opposite that corner,
+            // divided by the whole area. They add up to 1, and they're all
+            // >= 0 exactly when the point is inside the triangle. Dividing by
+            // the (negative) area also flips the signs back to positive.
+            const float w0 = edgeFunction(b, c, px, py) / area;
+            const float w1 = edgeFunction(c, a, px, py) / area;
+            const float w2 = edgeFunction(a, b, px, py) / area;
+            if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f) continue;
+
+            // Blend the corners' depths with the same weights. After the
+            // divide by w, depth changes linearly across the screen, so this
+            // simple blend gives the exact depth at this point.
+            const float z = w0 * a.z + w1 * b.z + w2 * c.z;
+            fb.setIfCloser(x, y, z, ch);
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -71,25 +138,41 @@ void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1) {
 }
 
 void drawWireframe(Framebuffer& fb, const Mesh& mesh, const Mat4& mvp) {
-    // Project each vertex once. A vertex is shared by several triangles, so
-    // this is much cheaper than projecting the corners of every triangle.
-    std::vector<ScreenPoint> points;
-    points.reserve(mesh.vertices.size());
-    for (const Vec3& v : mesh.vertices) {
-        points.push_back(projectToScreen(v, mvp, fb.width(), fb.height()));
-    }
+    const std::vector<ScreenPoint> points = projectVertices(mesh, mvp, fb.width(), fb.height());
 
     auto edge = [&](int i, int j) {
         const ScreenPoint& a = points[i];
         const ScreenPoint& b = points[j];
-        if (a.visible && b.visible) drawLine(fb, a.x, a.y, b.x, b.y);
+        if (!a.visible || !b.visible) return;
+        drawLine(fb, static_cast<int>(std::floor(a.x)), static_cast<int>(std::floor(a.y)),
+                 static_cast<int>(std::floor(b.x)), static_cast<int>(std::floor(b.y)));
     };
 
-    // Edges shared by two triangles get drawn twice. That's harmless here;
-    // step 5 replaces the wireframe with filled triangles anyway.
+    // Edges shared by two triangles get drawn twice. That's harmless here.
     for (const Triangle& t : mesh.triangles) {
         edge(t.a, t.b);
         edge(t.b, t.c);
         edge(t.c, t.a);
     }
+}
+
+int drawSolid(Framebuffer& fb, const Mesh& mesh, const Mat4& mvp) {
+    const std::vector<ScreenPoint> points = projectVertices(mesh, mvp, fb.width(), fb.height());
+
+    // Until we have lighting (step 6), give each triangle its own character
+    // so you can tell triangles apart and see which ones hide which.
+    static const char kPalette[] = "#@%&$*+=";
+    constexpr int kPaletteSize = sizeof(kPalette) - 1; // minus the '\0'
+
+    int drawn = 0;
+    for (std::size_t i = 0; i < mesh.triangles.size(); ++i) {
+        const Triangle& t = mesh.triangles[i];
+        const ScreenPoint& a = points[t.a];
+        const ScreenPoint& b = points[t.b];
+        const ScreenPoint& c = points[t.c];
+        if (!a.visible || !b.visible || !c.visible) continue;
+
+        if (fillTriangle(fb, a, b, c, kPalette[i % kPaletteSize])) ++drawn;
+    }
+    return drawn;
 }

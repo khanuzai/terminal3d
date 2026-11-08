@@ -15,3 +15,8 @@ void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1);
 // Projects every vertex of the mesh with the model-view-projection matrix and
 // draws the edges of every triangle.
 void drawWireframe(Framebuffer& fb, const Mesh& mesh, const Mat4& mvp);
+
+// Draws the mesh as solid, filled triangles. Triangles facing away from the
+// camera are skipped (back-face culling) and the depth buffer hides surfaces
+// behind other surfaces. Returns how many triangles were actually drawn.
+int drawSolid(Framebuffer& fb, const Mesh& mesh, const Mat4& mvp);

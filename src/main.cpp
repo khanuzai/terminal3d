@@ -75,8 +75,11 @@ int main(int argc, char** argv) {
         std::chrono::duration<double>(1.0 / kTargetFps));
     const auto start = Clock::now();
     auto nextFrame = start;
-    auto lastFrame = start;
-    float fps = kTargetFps;
+
+    // FPS counter: count frames over each one-second window, then show that count.
+    auto fpsWindowStart = start;
+    int framesInWindow = 0;
+    int fps = 0; // 0 until the first full second has passed
 
     while (!quitRequested()) {
         if (consumeResize()) {
@@ -88,17 +91,23 @@ int main(int argc, char** argv) {
         // model spins at the same speed however fast or slow frames are.
         const auto now = Clock::now();
         const float elapsed = std::chrono::duration<float>(now - start).count();
-        const float dt = std::chrono::duration<float>(now - lastFrame).count();
-        lastFrame = now;
-        if (dt > 0.0f) fps += (1.0f / dt - fps) * 0.1f; // smoothed, so the number doesn't jitter
+
+        const float windowSeconds = std::chrono::duration<float>(now - fpsWindowStart).count();
+        if (windowSeconds >= 1.0f) {
+            fps = static_cast<int>(std::lround(framesInWindow / windowSeconds));
+            framesInWindow = 0;
+            fpsWindowStart = now;
+        }
+        ++framesInWindow; // this frame belongs to the window that starts now
 
         const Mat4 model = Mat4::rotationX(kTilt) * Mat4::rotationY(elapsed * kSpinSpeed) * fit;
 
         vp.fb.clear();
-        drawWireframe(vp.fb, mesh, vp.viewProjection * model);
-        vp.fb.drawText(1, 0, info);
+        const int drawn = drawSolid(vp.fb, mesh, vp.viewProjection * model);
+        vp.fb.drawText(1, 0, info + ", " + std::to_string(drawn) + " drawn");
         vp.fb.drawText(1, vp.fb.height() - 1,
-                       std::to_string(static_cast<int>(std::lround(fps))) + " fps   Ctrl+C to quit");
+                       (fps > 0 ? std::to_string(fps) : std::string("--")) +
+                           " fps   Ctrl+C to quit");
         presentFrame(vp.fb.toAnsi());
 
         // Sleep until a fixed schedule of frame times, not "33 ms from now",
