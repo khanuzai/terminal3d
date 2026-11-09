@@ -150,6 +150,17 @@ struct Mat4 {
         return r;
     }
 
+    // Transforms a 3D point (w = 1). Fine for model and view matrices, whose
+    // bottom row is always (0, 0, 0, 1). Projection matrices need the full
+    // Vec4 version below, followed by a divide by w.
+    Vec3 transformPoint(const Vec3& p) const {
+        return {
+            m[0][0] * p.x + m[0][1] * p.y + m[0][2] * p.z + m[0][3],
+            m[1][0] * p.x + m[1][1] * p.y + m[1][2] * p.z + m[1][3],
+            m[2][0] * p.x + m[2][1] * p.y + m[2][2] * p.z + m[2][3],
+        };
+    }
+
     Vec4 operator*(const Vec4& v) const {
         return {
             m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z + m[0][3] * v.w,

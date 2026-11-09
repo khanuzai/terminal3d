@@ -17,6 +17,11 @@ constexpr int kTargetFps = 30;
 constexpr float kSpinSpeed = 0.8f; // radians per second around the vertical axis
 constexpr float kTilt = 0.4f;      // radians; tips the model so we see its top
 
+// Direction toward the light in world space: up, to the left, and in front of
+// the model (the camera is on the +z side). It stays fixed while the model
+// spins, so you can watch each face brighten and dim as it turns.
+constexpr Vec3 kToLight{-0.5f, 0.8f, 1.0f};
+
 // Everything that depends on the terminal's size. Rebuilt when the window is resized.
 struct Viewport {
     Framebuffer fb;
@@ -103,7 +108,7 @@ int main(int argc, char** argv) {
         const Mat4 model = Mat4::rotationX(kTilt) * Mat4::rotationY(elapsed * kSpinSpeed) * fit;
 
         vp.fb.clear();
-        const int drawn = drawSolid(vp.fb, mesh, vp.viewProjection * model);
+        const int drawn = drawShaded(vp.fb, mesh, model, vp.viewProjection, kToLight);
         vp.fb.drawText(1, 0, info + ", " + std::to_string(drawn) + " drawn");
         vp.fb.drawText(1, vp.fb.height() - 1,
                        (fps > 0 ? std::to_string(fps) : std::string("--")) +

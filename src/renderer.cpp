@@ -42,13 +42,30 @@ ScreenPoint projectToScreen(const Vec3& p, const Mat4& mvp, int width, int heigh
 
 // Projects each vertex once. A vertex is shared by several triangles, so this
 // is much cheaper than projecting the corners of every triangle separately.
-std::vector<ScreenPoint> projectVertices(const Mesh& mesh, const Mat4& mvp, int width, int height) {
+std::vector<ScreenPoint> projectVertices(const std::vector<Vec3>& positions, const Mat4& mvp,
+                                         int width, int height) {
     std::vector<ScreenPoint> points;
-    points.reserve(mesh.vertices.size());
-    for (const Vec3& v : mesh.vertices) {
-        points.push_back(projectToScreen(v, mvp, width, height));
+    points.reserve(positions.size());
+    for (const Vec3& p : positions) {
+        points.push_back(projectToScreen(p, mvp, width, height));
     }
     return points;
+}
+
+// Brightness ramp, from dimmest to brightest: characters with more "ink" look
+// brighter on a dark terminal background. A space isn't included, because a
+// surface that's lit only by ambient light should still be visible.
+constexpr char kShadeRamp[] = ".:-=+*#%@";
+constexpr int kShadeLevels = sizeof(kShadeRamp) - 1; // minus the '\0'
+
+// Light that reaches every surface, even ones facing away from the light.
+// Without it, those surfaces would all be the same dimmest character.
+constexpr float kAmbient = 0.15f;
+
+// Maps a brightness from 0 to 1 onto the ramp.
+char shadeChar(float intensity) {
+    const int level = static_cast<int>(intensity * kShadeLevels);
+    return kShadeRamp[std::clamp(level, 0, kShadeLevels - 1)];
 }
 
 // Picks the ASCII character that best matches a line's direction on screen.
@@ -138,7 +155,8 @@ void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1) {
 }
 
 void drawWireframe(Framebuffer& fb, const Mesh& mesh, const Mat4& mvp) {
-    const std::vector<ScreenPoint> points = projectVertices(mesh, mvp, fb.width(), fb.height());
+    const std::vector<ScreenPoint> points =
+        projectVertices(mesh.vertices, mvp, fb.width(), fb.height());
 
     auto edge = [&](int i, int j) {
         const ScreenPoint& a = points[i];
@@ -156,23 +174,39 @@ void drawWireframe(Framebuffer& fb, const Mesh& mesh, const Mat4& mvp) {
     }
 }
 
-int drawSolid(Framebuffer& fb, const Mesh& mesh, const Mat4& mvp) {
-    const std::vector<ScreenPoint> points = projectVertices(mesh, mvp, fb.width(), fb.height());
+int drawShaded(Framebuffer& fb, const Mesh& mesh, const Mat4& model,
+               const Mat4& viewProjection, const Vec3& toLight) {
+    // Move every vertex into world space once. Lighting is computed there,
+    // and the same positions are then projected onto the screen.
+    std::vector<Vec3> world;
+    world.reserve(mesh.vertices.size());
+    for (const Vec3& v : mesh.vertices) {
+        world.push_back(model.transformPoint(v));
+    }
+    const std::vector<ScreenPoint> points =
+        projectVertices(world, viewProjection, fb.width(), fb.height());
 
-    // Until we have lighting (step 6), give each triangle its own character
-    // so you can tell triangles apart and see which ones hide which.
-    static const char kPalette[] = "#@%&$*+=";
-    constexpr int kPaletteSize = sizeof(kPalette) - 1; // minus the '\0'
+    const Vec3 lightDir = normalize(toLight);
 
     int drawn = 0;
-    for (std::size_t i = 0; i < mesh.triangles.size(); ++i) {
-        const Triangle& t = mesh.triangles[i];
+    for (const Triangle& t : mesh.triangles) {
         const ScreenPoint& a = points[t.a];
         const ScreenPoint& b = points[t.b];
         const ScreenPoint& c = points[t.c];
         if (!a.visible || !b.visible || !c.visible) continue;
 
-        if (fillTriangle(fb, a, b, c, kPalette[i % kPaletteSize])) ++drawn;
+        // The face normal: cross two edges of the triangle. With corners in
+        // counter-clockwise order, it points out of the front of the face.
+        const Vec3& pa = world[t.a];
+        const Vec3 normal = normalize(cross(world[t.b] - pa, world[t.c] - pa));
+
+        // Lambert's cosine law: a surface facing the light head-on gets full
+        // light, and it falls off with the cosine of the angle (the dot
+        // product of two unit vectors). Facing away (negative) means no light.
+        const float diffuse = std::max(0.0f, dot(normal, lightDir));
+        const float intensity = kAmbient + (1.0f - kAmbient) * diffuse;
+
+        if (fillTriangle(fb, a, b, c, shadeChar(intensity))) ++drawn;
     }
     return drawn;
 }
