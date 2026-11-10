@@ -8,8 +8,8 @@
 namespace {
 
 // Where a vertex lands on the screen, and whether it can be drawn at all.
-// x and y are in cells but kept as floats, so triangle edges can fall between
-// cell centers. z is the depth: -1 at the near plane up to 1 at the far plane.
+// x and y are in pixels but kept as floats, so triangle edges can fall between
+// pixel centers. z is the depth: -1 at the near plane up to 1 at the far plane.
 struct ScreenPoint {
     float x = 0.0f;
     float y = 0.0f;
@@ -19,7 +19,7 @@ struct ScreenPoint {
 
 // Runs one vertex through the whole pipeline:
 //   model space --(mvp)--> clip space --(divide by w)--> normalized device
-//   coordinates, where the visible area is -1..1 on x and y --> cells.
+//   coordinates, where the visible area is -1..1 on x and y --> pixels.
 ScreenPoint projectToScreen(const Vec3& p, const Mat4& mvp, int width, int height) {
     const Vec4 clip = mvp * Vec4(p, 1.0f);
 
@@ -52,32 +52,16 @@ std::vector<ScreenPoint> projectVertices(const std::vector<Vec3>& positions, con
     return points;
 }
 
-// Brightness ramp, from dimmest to brightest: characters with more "ink" look
-// brighter on a dark terminal background. A space isn't included, because a
-// surface that's lit only by ambient light should still be visible.
-constexpr char kShadeRamp[] = ".:-=+*#%@";
-constexpr int kShadeLevels = sizeof(kShadeRamp) - 1; // minus the '\0'
-
 // Light that reaches every surface, even ones facing away from the light.
-// Without it, those surfaces would all be the same dimmest character.
+// Without it, those surfaces would all be black.
 constexpr float kAmbient = 0.15f;
 
-// Maps a brightness from 0 to 1 onto the ramp.
-char shadeChar(float intensity) {
-    const int level = static_cast<int>(intensity * kShadeLevels);
-    return kShadeRamp[std::clamp(level, 0, kShadeLevels - 1)];
-}
-
-// Picks the ASCII character that best matches a line's direction on screen.
-// Vertical distances are scaled by kCellAspect so that angles are judged as
-// they actually look, not in raw cell counts.
-char lineChar(int dx, int dy) {
-    const float ax = static_cast<float>(std::abs(dx));
-    const float ay = static_cast<float>(std::abs(dy)) * kCellAspect;
-    if (ay < ax * 0.5f) return '-';
-    if (ax < ay * 0.5f) return '|';
-    // Screen y points down, so "right and down" is a backslash.
-    return (dx > 0) == (dy > 0) ? '\\' : '/';
+// Scales a color by a brightness from 0 to 1.
+Color shade(const Color& base, float intensity) {
+    auto channel = [intensity](std::uint8_t v) {
+        return static_cast<std::uint8_t>(std::lround(v * std::clamp(intensity, 0.0f, 1.0f)));
+    };
+    return {channel(base.r), channel(base.g), channel(base.b)};
 }
 
 // The "edge function": tells which side of the line a->b the point p is on.
@@ -91,7 +75,7 @@ float edgeFunction(const ScreenPoint& a, const ScreenPoint& b, float px, float p
 // Fills one triangle into the framebuffer, depth-tested.
 // Returns false if the triangle was culled because it faces away from us.
 bool fillTriangle(Framebuffer& fb, const ScreenPoint& a, const ScreenPoint& b,
-                  const ScreenPoint& c, char ch) {
+                  const ScreenPoint& c, const Color& color) {
     // Signed area of the whole triangle. Our models list corners
     // counter-clockwise as seen from the front, but screen y points down,
     // which mirrors the picture: so front-facing triangles come out with
@@ -99,7 +83,7 @@ bool fillTriangle(Framebuffer& fb, const ScreenPoint& a, const ScreenPoint& b,
     const float area = edgeFunction(a, b, c.x, c.y);
     if (area >= 0.0f) return false;
 
-    // Only test cells inside the triangle's bounding box, clamped to the screen.
+    // Only test pixels inside the triangle's bounding box, clamped to the screen.
     const int minX = std::max(0, static_cast<int>(std::floor(std::min({a.x, b.x, c.x}))));
     const int maxX = std::min(fb.width() - 1, static_cast<int>(std::floor(std::max({a.x, b.x, c.x}))));
     const int minY = std::max(0, static_cast<int>(std::floor(std::min({a.y, b.y, c.y}))));
@@ -107,7 +91,7 @@ bool fillTriangle(Framebuffer& fb, const ScreenPoint& a, const ScreenPoint& b,
 
     for (int y = minY; y <= maxY; ++y) {
         for (int x = minX; x <= maxX; ++x) {
-            // Sample at the center of the cell.
+            // Sample at the center of the pixel.
             const float px = x + 0.5f;
             const float py = y + 0.5f;
 
@@ -125,7 +109,7 @@ bool fillTriangle(Framebuffer& fb, const ScreenPoint& a, const ScreenPoint& b,
             // divide by w, depth changes linearly across the screen, so this
             // simple blend gives the exact depth at this point.
             const float z = w0 * a.z + w1 * b.z + w2 * c.z;
-            fb.setIfCloser(x, y, z, ch);
+            fb.setPixelIfCloser(x, y, z, color);
         }
     }
     return true;
@@ -133,11 +117,9 @@ bool fillTriangle(Framebuffer& fb, const ScreenPoint& a, const ScreenPoint& b,
 
 } // namespace
 
-void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1) {
-    const char c = lineChar(x1 - x0, y1 - y0);
-
-    // Bresenham's algorithm: step one cell at a time along the line, using
-    // only integer math. `err` tracks how far the true line is from the cells
+void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1, const Color& color) {
+    // Bresenham's algorithm: step one pixel at a time along the line, using
+    // only integer math. `err` tracks how far the true line is from the pixels
     // we've chosen, and tells us when to also step in the other direction.
     const int dx = std::abs(x1 - x0);
     const int dy = -std::abs(y1 - y0);
@@ -146,7 +128,7 @@ void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1) {
     int err = dx + dy;
 
     while (true) {
-        fb.set(x0, y0, c);
+        fb.setPixel(x0, y0, color);
         if (x0 == x1 && y0 == y1) break;
         const int e2 = 2 * err;
         if (e2 >= dy) { err += dy; x0 += sx; }
@@ -154,7 +136,7 @@ void drawLine(Framebuffer& fb, int x0, int y0, int x1, int y1) {
     }
 }
 
-void drawWireframe(Framebuffer& fb, const Mesh& mesh, const Mat4& mvp) {
+void drawWireframe(Framebuffer& fb, const Mesh& mesh, const Mat4& mvp, const Color& color) {
     const std::vector<ScreenPoint> points =
         projectVertices(mesh.vertices, mvp, fb.width(), fb.height());
 
@@ -163,7 +145,7 @@ void drawWireframe(Framebuffer& fb, const Mesh& mesh, const Mat4& mvp) {
         const ScreenPoint& b = points[j];
         if (!a.visible || !b.visible) return;
         drawLine(fb, static_cast<int>(std::floor(a.x)), static_cast<int>(std::floor(a.y)),
-                 static_cast<int>(std::floor(b.x)), static_cast<int>(std::floor(b.y)));
+                 static_cast<int>(std::floor(b.x)), static_cast<int>(std::floor(b.y)), color);
     };
 
     // Edges shared by two triangles get drawn twice. That's harmless here.
@@ -175,7 +157,7 @@ void drawWireframe(Framebuffer& fb, const Mesh& mesh, const Mat4& mvp) {
 }
 
 int drawShaded(Framebuffer& fb, const Mesh& mesh, const Mat4& model,
-               const Mat4& viewProjection, const Vec3& toLight) {
+               const Mat4& viewProjection, const Vec3& toLight, const Color& baseColor) {
     // Move every vertex into world space once. Lighting is computed there,
     // and the same positions are then projected onto the screen.
     std::vector<Vec3> world;
@@ -206,7 +188,7 @@ int drawShaded(Framebuffer& fb, const Mesh& mesh, const Mat4& model,
         const float diffuse = std::max(0.0f, dot(normal, lightDir));
         const float intensity = kAmbient + (1.0f - kAmbient) * diffuse;
 
-        if (fillTriangle(fb, a, b, c, shadeChar(intensity))) ++drawn;
+        if (fillTriangle(fb, a, b, c, shade(baseColor, intensity))) ++drawn;
     }
     return drawn;
 }

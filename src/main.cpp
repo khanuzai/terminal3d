@@ -5,6 +5,7 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include "framebuffer.h"
 #include "obj_loader.h"
@@ -22,19 +23,24 @@ constexpr float kTilt = 0.4f;      // radians; tips the model so we see its top
 // spins, so you can watch each face brighten and dim as it turns.
 constexpr Vec3 kToLight{-0.5f, 0.8f, 1.0f};
 
+// The model's color when fully lit: a warm orange.
+constexpr Color kModelColor{255, 150, 60};
+
 // Everything that depends on the terminal's size. Rebuilt when the window is resized.
 struct Viewport {
     Framebuffer fb;
     Mat4 viewProjection;
 };
 
-Viewport makeViewport(const TermSize& size) {
-    // The screen is `cols` cells wide and `rows` cells tall, and each cell is
-    // kCellAspect times taller than wide. So in real, visible proportions the
-    // screen is cols wide and rows * kCellAspect tall.
+Viewport makeViewport(const TermSize& size, OutputMode mode) {
+    Framebuffer fb(size.cols, size.rows, mode);
+
+    // The image is width x height pixels, and each pixel is pixelAspect times
+    // taller than wide. So in real, visible proportions the image is `width`
+    // wide and height * pixelAspect tall.
     const float pi = 3.14159265f;
     const float fovY = 60.0f * pi / 180.0f;
-    const float aspect = static_cast<float>(size.cols) / (size.rows * kCellAspect);
+    const float aspect = static_cast<float>(fb.width()) / (fb.height() * fb.pixelAspect());
 
     // Pull the camera back far enough that the unit sphere fits in view. On a
     // narrow (portrait) window the horizontal field of view is the tighter one.
@@ -45,16 +51,19 @@ Viewport makeViewport(const TermSize& size) {
     // projection: perspective, from 3D to the 2D screen.
     const Mat4 view = Mat4::translation({0.0f, 0.0f, -distance});
     const Mat4 projection = Mat4::perspective(fovY, aspect, 0.1f, 100.0f);
-    return {Framebuffer(size.cols, size.rows), projection * view};
+    return {std::move(fb), projection * view};
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        std::cerr << "usage: " << argv[0] << " <model.obj>\n";
+    // Proper option parsing comes in step 8; for now there's one optional flag.
+    const bool asciiFlag = argc == 3 && std::string(argv[2]) == "--ascii";
+    if (argc != 2 && !asciiFlag) {
+        std::cerr << "usage: " << argv[0] << " <model.obj> [--ascii]\n";
         return 1;
     }
+    const OutputMode mode = asciiFlag ? OutputMode::Ascii : OutputMode::HalfBlock;
 
     Mesh mesh;
     try {
@@ -73,7 +82,7 @@ int main(int argc, char** argv) {
     // point after this ends the loop normally and the session gets restored.
     installSignalHandlers();
     TerminalSession session;
-    Viewport vp = makeViewport(terminalSize());
+    Viewport vp = makeViewport(terminalSize(), mode);
 
     using Clock = std::chrono::steady_clock;
     const auto frameDuration = std::chrono::duration_cast<Clock::duration>(
@@ -88,7 +97,7 @@ int main(int argc, char** argv) {
 
     while (!quitRequested()) {
         if (consumeResize()) {
-            vp = makeViewport(terminalSize());
+            vp = makeViewport(terminalSize(), mode);
             clearTerminal();
         }
 
@@ -108,9 +117,10 @@ int main(int argc, char** argv) {
         const Mat4 model = Mat4::rotationX(kTilt) * Mat4::rotationY(elapsed * kSpinSpeed) * fit;
 
         vp.fb.clear();
-        const int drawn = drawShaded(vp.fb, mesh, model, vp.viewProjection, kToLight);
+        const int drawn =
+            drawShaded(vp.fb, mesh, model, vp.viewProjection, kToLight, kModelColor);
         vp.fb.drawText(1, 0, info + ", " + std::to_string(drawn) + " drawn");
-        vp.fb.drawText(1, vp.fb.height() - 1,
+        vp.fb.drawText(1, vp.fb.rows() - 1,
                        (fps > 0 ? std::to_string(fps) : std::string("--")) +
                            " fps   Ctrl+C to quit");
         presentFrame(vp.fb.toAnsi());
