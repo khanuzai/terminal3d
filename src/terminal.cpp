@@ -88,9 +88,29 @@ bool consumeResize() {
 }
 
 TerminalSession::TerminalSession() {
+    // Normally the terminal driver collects a whole line, echoing it as you
+    // type, and only hands it to the program when you press Enter ("canonical"
+    // mode). Turning off ICANON delivers each key right away, and turning off
+    // ECHO stops typed keys from being printed over our picture.
+    //
+    // We leave ISIG on, so Ctrl+C still sends SIGINT and the signal handler
+    // still works. That's why this isn't fully raw mode (cfmakeraw).
+    if (tcgetattr(STDIN_FILENO, &originalInput_) == 0) {
+        termios raw = originalInput_;
+        raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
+        // TCSAFLUSH applies the change after pending output is written, and
+        // throws away anything typed before we started.
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+        restoreInput_ = true;
+    }
+
     writeToTerminal(std::string(kEnterAltScreen) + kHideCursor + kClearScreen);
 }
 
 TerminalSession::~TerminalSession() {
     writeToTerminal(std::string(kShowCursor) + kLeaveAltScreen);
+
+    // TCSAFLUSH also throws away keys pressed but not yet read, so they don't
+    // end up typed into the shell after we exit.
+    if (restoreInput_) tcsetattr(STDIN_FILENO, TCSAFLUSH, &originalInput_);
 }

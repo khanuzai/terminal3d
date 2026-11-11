@@ -18,6 +18,8 @@ add_executable(term3d
     src/renderer.cpp
     src/framebuffer.cpp
     src/terminal.cpp
+    src/input.cpp
+    src/controls.cpp
 )
 
 # Turn on the useful warnings so the compiler can catch mistakes for us.

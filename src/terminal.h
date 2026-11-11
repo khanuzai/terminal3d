@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include <termios.h>
+
 // Size of the terminal window, measured in character cells.
 struct TermSize {
     int cols;
@@ -38,10 +40,13 @@ bool quitRequested();
 // True if the window was resized since the last call. Calling it clears the flag.
 bool consumeResize();
 
-// RAII guard for the terminal's state. Creating one switches to the
-// "alternate screen" (a separate full-screen buffer, which is what vim and htop
-// use) and hides the cursor. Destroying it undoes both, so the user's shell
-// comes back exactly as it was.
+// RAII guard for the terminal's state. Creating one:
+//   - switches to the "alternate screen" (a separate full-screen buffer,
+//     which is what vim and htop use) and hides the cursor
+//   - puts keyboard input into "raw" mode: each key arrives as soon as it's
+//     pressed, without waiting for Enter, and isn't echoed on screen
+// Destroying it undoes all of that, so the user's shell comes back exactly as
+// it was.
 class TerminalSession {
 public:
     TerminalSession();
@@ -50,4 +55,8 @@ public:
     // Copying would mean restoring the terminal twice, so forbid it.
     TerminalSession(const TerminalSession&) = delete;
     TerminalSession& operator=(const TerminalSession&) = delete;
+
+private:
+    termios originalInput_{};    // input settings from before we changed them
+    bool restoreInput_ = false;  // false if stdin isn't a terminal
 };
