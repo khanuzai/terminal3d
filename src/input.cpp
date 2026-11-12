@@ -13,6 +13,56 @@ bool isFinalByte(char c) {
     return c >= 0x40 && c <= 0x7e;
 }
 
+// Decodes the body of an SGR mouse report: "0;12;5" from ESC [ < 0;12;5 M.
+// The three numbers are a button code, then the column and row (counting from
+// 1). The final byte is 'M' for a press or movement and 'm' for a release.
+// Returns false if the report is malformed or isn't one we use.
+bool parseMouse(const std::string& params, char final, InputEvent& event) {
+    using Type = InputEvent::Type;
+
+    // Split "b;x;y" into three numbers.
+    int values[3] = {};
+    int count = 0;
+    bool haveDigit = false;
+    for (char c : params) {
+        if (c >= '0' && c <= '9') {
+            if (values[count] > 100000) return false; // nonsense; stop before it overflows
+            values[count] = values[count] * 10 + (c - '0');
+            haveDigit = true;
+        } else if (c == ';' && haveDigit && count < 2) {
+            ++count;
+            haveDigit = false;
+        } else {
+            return false;
+        }
+    }
+    if (count != 2 || !haveDigit) return false;
+
+    event.x = values[1] - 1;
+    event.y = values[2] - 1;
+
+    // The button code packs several things into its bits:
+    //   bits 0-1 (1, 2):    which button: 0 left, 1 middle, 2 right
+    //   bits 2-4 (4-16):    Shift, Alt, Ctrl held; we ignore those
+    //   bit 5 (32):         the mouse moved while a button was held
+    //   bit 6 (64):         the scroll wheel: 64 is up, 65 is down
+    const int code = values[0] & ~(4 | 8 | 16);
+
+    if (code & 64) {
+        if (final != 'M') return false;
+        if ((code & 3) == 0) event.type = Type::ScrollUp;
+        else if ((code & 3) == 1) event.type = Type::ScrollDown;
+        else return false; // sideways scrolling
+    } else if (final == 'm') {
+        event.type = Type::MouseRelease;
+    } else if (code & 32) {
+        event.type = Type::MouseDrag;
+    } else {
+        event.type = Type::MousePress;
+    }
+    return true;
+}
+
 } // namespace
 
 std::vector<InputEvent> parseInput(const std::string& bytes, std::size_t& consumed) {
@@ -42,6 +92,18 @@ std::vector<InputEvent> parseInput(const std::string& bytes, std::size_t& consum
         std::size_t end = i + 2;
         while (end < bytes.size() && !isFinalByte(bytes[end])) ++end;
         if (end == bytes.size()) break; // incomplete; wait for the rest
+
+        // Mouse reports start with ESC [ < and end with M or m.
+        const bool isMouse = bytes[i + 1] == '[' && i + 2 < end && bytes[i + 2] == '<' &&
+                             (bytes[end] == 'M' || bytes[end] == 'm');
+        if (isMouse) {
+            InputEvent event{Type::MousePress};
+            if (parseMouse(bytes.substr(i + 3, end - (i + 3)), bytes[end], event)) {
+                events.push_back(event);
+            }
+            i = end + 1;
+            continue;
+        }
 
         switch (bytes[end]) {
             case 'A': events.push_back({Type::Up}); break;

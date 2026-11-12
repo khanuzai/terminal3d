@@ -83,7 +83,8 @@ int main(int argc, char** argv) {
     const std::string info = std::string(argv[1]) + "  " +
                              std::to_string(mesh.vertices.size()) + " vertices, " +
                              std::to_string(mesh.triangles.size()) + " triangles";
-    const std::string help = "arrows rotate  +/- zoom  space spin  w wireframe  r reset  q quit";
+    const std::string help =
+        "drag/arrows rotate  scroll/+- zoom  space spin  w wireframe  r reset  q quit";
 
     // Install the handlers before touching the terminal, so a Ctrl+C at any
     // point after this ends the loop normally and the session gets restored.

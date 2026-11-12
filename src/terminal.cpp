@@ -17,6 +17,13 @@ constexpr const char* kClearScreen    = "\x1b[2J";
 constexpr const char* kBeginSync      = "\x1b[?2026h";
 constexpr const char* kEndSync        = "\x1b[?2026l";
 
+// Mouse reporting. Mode 1002 reports button presses, releases, and movement
+// while a button is held (enough for dragging, without a flood of events
+// every time the mouse merely passes over the window). Mode 1006 picks the
+// "SGR" format for those reports, which handles windows of any size.
+constexpr const char* kEnableMouse    = "\x1b[?1002h\x1b[?1006h";
+constexpr const char* kDisableMouse   = "\x1b[?1006l\x1b[?1002l";
+
 // Flags set by the signal handlers. A signal can arrive between any two
 // instructions of the program, so a handler may only do a tiny set of
 // "async-signal-safe" things. Writing a volatile sig_atomic_t is one of them.
@@ -104,11 +111,13 @@ TerminalSession::TerminalSession() {
         restoreInput_ = true;
     }
 
-    writeToTerminal(std::string(kEnterAltScreen) + kHideCursor + kClearScreen);
+    writeToTerminal(std::string(kEnterAltScreen) + kHideCursor + kClearScreen + kEnableMouse);
 }
 
 TerminalSession::~TerminalSession() {
-    writeToTerminal(std::string(kShowCursor) + kLeaveAltScreen);
+    // Undo in reverse order. If mouse reporting were left on, every click in
+    // the shell afterwards would print escape-code garbage.
+    writeToTerminal(std::string(kDisableMouse) + kShowCursor + kLeaveAltScreen);
 
     // TCSAFLUSH also throws away keys pressed but not yet read, so they don't
     // end up typed into the shell after we exit.

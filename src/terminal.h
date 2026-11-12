@@ -45,6 +45,8 @@ bool consumeResize();
 //     which is what vim and htop use) and hides the cursor
 //   - puts keyboard input into "raw" mode: each key arrives as soon as it's
 //     pressed, without waiting for Enter, and isn't echoed on screen
+//   - asks the terminal to report mouse clicks, drags and the scroll wheel
+//     as input
 // Destroying it undoes all of that, so the user's shell comes back exactly as
 // it was.
 class TerminalSession {

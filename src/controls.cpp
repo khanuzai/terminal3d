@@ -7,6 +7,9 @@ namespace {
 
 constexpr float kRotateStep = 0.15f; // radians per arrow key press
 constexpr float kZoomStep = 1.15f;   // zoom factor per + or - press
+constexpr float kScrollZoomStep = 1.08f; // per scroll event; trackpads send many of these
+constexpr float kDragSpeed = 0.03f;  // radians per cell the mouse moves sideways
+constexpr float kCellAspect = 2.0f;  // a cell is about twice as tall as wide
 constexpr float kMinZoom = 0.3f;
 constexpr float kMaxZoom = 8.0f;
 constexpr float kMaxPitch = 1.5f;    // just under 90 degrees, so the model never flips over
@@ -25,6 +28,27 @@ bool applyInput(ViewState& view, const InputEvent& event) {
         case Type::Up:    view.pitch -= kRotateStep; break;
         case Type::Down:  view.pitch += kRotateStep; break;
         case Type::Escape: return true;
+
+        // Dragging turns the model as if you'd grabbed its front and pulled.
+        case Type::MousePress:
+            view.dragging = true;
+            view.dragX = event.x;
+            view.dragY = event.y;
+            break;
+        case Type::MouseDrag:
+            if (view.dragging) {
+                view.yaw += (event.x - view.dragX) * kDragSpeed;
+                // A cell is twice as tall as wide, so one row of movement is
+                // as far on screen as two columns: rotate twice as much.
+                view.pitch += (event.y - view.dragY) * kDragSpeed * kCellAspect;
+                view.dragX = event.x;
+                view.dragY = event.y;
+            }
+            break;
+        case Type::MouseRelease: view.dragging = false; break;
+        case Type::ScrollUp:     view.zoom *= kScrollZoomStep; break;
+        case Type::ScrollDown:   view.zoom /= kScrollZoomStep; break;
+
         case Type::Char:
             switch (event.ch) {
                 case 'q': case 'Q': return true;
@@ -51,7 +75,8 @@ bool applyInput(ViewState& view, const InputEvent& event) {
 }
 
 void advanceView(ViewState& view, float dt) {
-    if (view.autoSpin) {
+    // Hold still while being dragged, so the model follows the mouse exactly.
+    if (view.autoSpin && !view.dragging) {
         // Keep yaw within one turn; floats lose precision as numbers grow.
         view.yaw = std::fmod(view.yaw + kSpinSpeed * dt, kTwoPi);
     }
