@@ -108,6 +108,23 @@ int main(int argc, char** argv) {
 
     bool quit = false;
     while (!quit && !quitRequested()) {
+        // Ctrl+Z: hand the terminal back to the shell, then actually stop.
+        // stopProcess() returns once we're resumed (e.g. with `fg`), and the
+        // SIGCONT that resumed us is handled just below.
+        if (consumeSuspend()) {
+            session.leave();
+            stopProcess();
+        }
+
+        // We were resumed. Take the terminal over again. The window may have
+        // been resized while we were stopped, so start from its current size.
+        if (consumeContinue()) {
+            session.enter();
+            vp = makeViewport(terminalSize(), mode);
+            fpsWindowStart = Clock::now();
+            framesInWindow = 0;
+        }
+
         if (consumeResize()) {
             vp = makeViewport(terminalSize(), mode);
             clearTerminal();
@@ -120,7 +137,7 @@ int main(int argc, char** argv) {
 
         // Animate by the real time since the last frame, so the model spins at
         // the same speed however fast or slow frames are. Capping it stops a
-        // long pause (like a slow frame) from making the model jump.
+        // long pause (a slow frame, or being suspended) from making the model jump.
         const auto now = Clock::now();
         const float dt = std::min(std::chrono::duration<float>(now - lastFrame).count(), 0.1f);
         lastFrame = now;
@@ -149,7 +166,9 @@ int main(int argc, char** argv) {
         vp.fb.drawText(1, 0, status);
         vp.fb.drawText(1, vp.fb.rows() - 1,
                        (fps > 0 ? std::to_string(fps) : std::string("--")) + " fps   " + help);
-        presentFrame(vp.fb.toAnsi());
+        // If the frame can't be written, the terminal is gone (for example its
+        // window was closed): there's nobody left to draw for, so stop.
+        if (!presentFrame(vp.fb.toAnsi())) break;
 
         // Sleep until a fixed schedule of frame times, not "33 ms from now",
         // so the time spent drawing doesn't add up and slow the frame rate.

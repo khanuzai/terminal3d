@@ -29,9 +29,29 @@ constexpr const char* kDisableMouse   = "\x1b[?1006l\x1b[?1002l";
 // "async-signal-safe" things. Writing a volatile sig_atomic_t is one of them.
 volatile std::sig_atomic_t gQuitRequested = 0;
 volatile std::sig_atomic_t gResized = 0;
+volatile std::sig_atomic_t gSuspendRequested = 0;
+volatile std::sig_atomic_t gContinued = 0;
 
 void onQuitSignal(int) { gQuitRequested = 1; }
 void onResizeSignal(int) { gResized = 1; }
+void onSuspendSignal(int) { gSuspendRequested = 1; }
+void onContinueSignal(int) { gContinued = 1; }
+
+void setHandler(int signal, void (*handler)(int)) {
+    struct sigaction sa {};
+    sigemptyset(&sa.sa_mask);
+    sa.sa_handler = handler;
+    sigaction(signal, &sa, nullptr);
+}
+
+// Shared by the consume* functions. Clears the flag *before* the caller
+// reacts: if the signal arrives again meanwhile, the flag gets set again and
+// we catch it next frame instead of losing it.
+bool consumeFlag(volatile std::sig_atomic_t& flag) {
+    if (!flag) return false;
+    flag = 0;
+    return true;
+}
 
 } // namespace
 
@@ -45,7 +65,7 @@ TermSize terminalSize() {
     return {80, 24};
 }
 
-void writeToTerminal(const std::string& data) {
+bool writeToTerminal(const std::string& data) {
     const char* p = data.data();
     std::size_t left = data.size();
 
@@ -55,15 +75,16 @@ void writeToTerminal(const std::string& data) {
         const ssize_t n = write(STDOUT_FILENO, p, left);
         if (n < 0) {
             if (errno == EINTR) continue;
-            return; // the terminal went away; nothing useful left to do
+            return false; // e.g. EIO: the terminal was closed
         }
         p += n;
         left -= static_cast<std::size_t>(n);
     }
+    return true;
 }
 
-void presentFrame(const std::string& frame) {
-    writeToTerminal(kBeginSync + frame + kEndSync);
+bool presentFrame(const std::string& frame) {
+    return writeToTerminal(kBeginSync + frame + kEndSync);
 }
 
 void clearTerminal() {
@@ -71,55 +92,67 @@ void clearTerminal() {
 }
 
 void installSignalHandlers() {
-    struct sigaction sa {};
-    sigemptyset(&sa.sa_mask);
-
-    sa.sa_handler = onQuitSignal;
-    sigaction(SIGINT, &sa, nullptr);
-    sigaction(SIGTERM, &sa, nullptr);
-
-    sa.sa_handler = onResizeSignal;
-    sigaction(SIGWINCH, &sa, nullptr);
+    setHandler(SIGINT, onQuitSignal);
+    setHandler(SIGTERM, onQuitSignal);
+    setHandler(SIGHUP, onQuitSignal);
+    setHandler(SIGWINCH, onResizeSignal);
+    setHandler(SIGTSTP, onSuspendSignal);
+    setHandler(SIGCONT, onContinueSignal);
 }
 
 bool quitRequested() {
     return gQuitRequested != 0;
 }
 
-bool consumeResize() {
-    if (!gResized) return false;
-    // Clear the flag *before* the caller reads the new size: if another resize
-    // arrives right after this, the flag gets set again and we catch it next frame.
-    gResized = 0;
-    return true;
+bool consumeResize() { return consumeFlag(gResized); }
+bool consumeSuspend() { return consumeFlag(gSuspendRequested); }
+bool consumeContinue() { return consumeFlag(gContinued); }
+
+void stopProcess() {
+    // Our SIGTSTP handler only sets a flag, so to actually stop we switch
+    // SIGTSTP back to its default action ("stop the process") and send it to
+    // ourselves. raise() doesn't return until something sends SIGCONT, which
+    // is what the shell's `fg` command does. Then we put our handler back.
+    setHandler(SIGTSTP, SIG_DFL);
+    raise(SIGTSTP);
+    setHandler(SIGTSTP, onSuspendSignal);
 }
 
 TerminalSession::TerminalSession() {
+    hasOriginalInput_ = tcgetattr(STDIN_FILENO, &originalInput_) == 0;
+    enter();
+}
+
+TerminalSession::~TerminalSession() {
+    leave();
+}
+
+void TerminalSession::enter() {
     // Normally the terminal driver collects a whole line, echoing it as you
     // type, and only hands it to the program when you press Enter ("canonical"
     // mode). Turning off ICANON delivers each key right away, and turning off
     // ECHO stops typed keys from being printed over our picture.
     //
-    // We leave ISIG on, so Ctrl+C still sends SIGINT and the signal handler
-    // still works. That's why this isn't fully raw mode (cfmakeraw).
-    if (tcgetattr(STDIN_FILENO, &originalInput_) == 0) {
+    // We leave ISIG on, so Ctrl+C and Ctrl+Z still send SIGINT and SIGTSTP and
+    // our signal handlers still work. That's why this isn't fully raw mode
+    // (cfmakeraw).
+    if (hasOriginalInput_) {
         termios raw = originalInput_;
         raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
         // TCSAFLUSH applies the change after pending output is written, and
-        // throws away anything typed before we started.
+        // throws away anything typed before now.
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-        restoreInput_ = true;
     }
 
     writeToTerminal(std::string(kEnterAltScreen) + kHideCursor + kClearScreen + kEnableMouse);
 }
 
-TerminalSession::~TerminalSession() {
+void TerminalSession::leave() {
     // Undo in reverse order. If mouse reporting were left on, every click in
     // the shell afterwards would print escape-code garbage.
     writeToTerminal(std::string(kDisableMouse) + kShowCursor + kLeaveAltScreen);
 
     // TCSAFLUSH also throws away keys pressed but not yet read, so they don't
-    // end up typed into the shell after we exit.
-    if (restoreInput_) tcsetattr(STDIN_FILENO, TCSAFLUSH, &originalInput_);
+    // end up typed into the shell.
+    if (hasOriginalInput_) tcsetattr(STDIN_FILENO, TCSAFLUSH, &originalInput_);
 }
