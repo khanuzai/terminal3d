@@ -83,10 +83,31 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Work out which side of each triangle is the front, and whether backs
+    // can ever be seen. A closed mesh has a definite inside, so if its
+    // triangles face inward (negative volume) we can just turn them around.
+    // An open mesh has no inside to measure; --flip is the manual fix there.
+    const bool closed = isClosed(mesh);
+    bool autoFlipped = false;
+    if (opts.flip) {
+        flipWinding(mesh);
+    } else if (closed && signedVolume(mesh) < 0.0) {
+        flipWinding(mesh);
+        autoFlipped = true;
+    }
+
+    ShadeSettings shading;
+    shading.toLight = kToLight;
+    shading.baseColor = opts.color;
+    shading.twoSided = opts.faces == FaceMode::TwoSided ||
+                       (opts.faces == FaceMode::Auto && !closed);
+
     const Mat4 fit = fitToUnitSphere(mesh);
-    const std::string info = opts.modelPath + "  " +
-                             std::to_string(mesh.vertices.size()) + " vertices, " +
-                             std::to_string(mesh.triangles.size()) + " triangles";
+    const std::string info =
+        opts.modelPath + "  " + std::to_string(mesh.vertices.size()) + " vertices, " +
+        std::to_string(mesh.triangles.size()) + " triangles, " +
+        (closed ? "closed" : "open") + (autoFlipped ? " (was inside-out, fixed)" : "") +
+        (opts.flip ? ", flipped" : "") + (shading.twoSided ? ", two-sided" : "");
     const std::string help =
         "drag/arrows rotate  scroll/+- zoom  space spin  w wireframe  r reset  q quit";
 
@@ -167,7 +188,7 @@ int main(int argc, char** argv) {
             drawWireframe(vp.fb, mesh, vpMatrix * model, opts.color);
             status += ", wireframe";
         } else {
-            const int drawn = drawShaded(vp.fb, mesh, model, vpMatrix, kToLight, opts.color);
+            const int drawn = drawShaded(vp.fb, mesh, model, vpMatrix, shading);
             status += ", " + std::to_string(drawn) + " drawn";
         }
         vp.fb.drawText(1, 0, status);

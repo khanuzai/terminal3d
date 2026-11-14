@@ -72,17 +72,11 @@ float edgeFunction(const ScreenPoint& a, const ScreenPoint& b, float px, float p
     return (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x);
 }
 
-// Fills one triangle into the framebuffer, depth-tested.
-// Returns false if the triangle was culled because it faces away from us.
-bool fillTriangle(Framebuffer& fb, const ScreenPoint& a, const ScreenPoint& b,
-                  const ScreenPoint& c, const Color& color) {
-    // Signed area of the whole triangle. Our models list corners
-    // counter-clockwise as seen from the front, but screen y points down,
-    // which mirrors the picture: so front-facing triangles come out with
-    // *negative* area here. Zero area means the triangle is seen edge-on.
-    const float area = edgeFunction(a, b, c.x, c.y);
-    if (area >= 0.0f) return false;
-
+// Fills one triangle into the framebuffer, depth-tested. `area` is the
+// triangle's signed area from edgeFunction(a, b, c), and must not be zero.
+// Either sign works, so this draws front and back faces alike.
+void fillTriangle(Framebuffer& fb, const ScreenPoint& a, const ScreenPoint& b,
+                  const ScreenPoint& c, float area, const Color& color) {
     // Only test pixels inside the triangle's bounding box, clamped to the screen.
     const int minX = std::max(0, static_cast<int>(std::floor(std::min({a.x, b.x, c.x}))));
     const int maxX = std::min(fb.width() - 1, static_cast<int>(std::floor(std::max({a.x, b.x, c.x}))));
@@ -99,7 +93,8 @@ bool fillTriangle(Framebuffer& fb, const ScreenPoint& a, const ScreenPoint& b,
             // Each is the area of the small triangle opposite that corner,
             // divided by the whole area. They add up to 1, and they're all
             // >= 0 exactly when the point is inside the triangle. Dividing by
-            // the (negative) area also flips the signs back to positive.
+            // the whole signed area makes that true whichever way round the
+            // corners go: the signs cancel.
             const float w0 = edgeFunction(b, c, px, py) / area;
             const float w1 = edgeFunction(c, a, px, py) / area;
             const float w2 = edgeFunction(a, b, px, py) / area;
@@ -112,7 +107,6 @@ bool fillTriangle(Framebuffer& fb, const ScreenPoint& a, const ScreenPoint& b,
             fb.setPixelIfCloser(x, y, z, color);
         }
     }
-    return true;
 }
 
 } // namespace
@@ -157,7 +151,7 @@ void drawWireframe(Framebuffer& fb, const Mesh& mesh, const Mat4& mvp, const Col
 }
 
 int drawShaded(Framebuffer& fb, const Mesh& mesh, const Mat4& model,
-               const Mat4& viewProjection, const Vec3& toLight, const Color& baseColor) {
+               const Mat4& viewProjection, const ShadeSettings& settings) {
     // Move every vertex into world space once. Lighting is computed there,
     // and the same positions are then projected onto the screen.
     std::vector<Vec3> world;
@@ -168,7 +162,7 @@ int drawShaded(Framebuffer& fb, const Mesh& mesh, const Mat4& model,
     const std::vector<ScreenPoint> points =
         projectVertices(world, viewProjection, fb.width(), fb.height());
 
-    const Vec3 lightDir = normalize(toLight);
+    const Vec3 lightDir = normalize(settings.toLight);
 
     int drawn = 0;
     for (const Triangle& t : mesh.triangles) {
@@ -177,10 +171,22 @@ int drawShaded(Framebuffer& fb, const Mesh& mesh, const Mat4& model,
         const ScreenPoint& c = points[t.c];
         if (!a.visible || !b.visible || !c.visible) continue;
 
+        // Signed area on screen. Our models list corners counter-clockwise as
+        // seen from the front, but screen y points down, which mirrors the
+        // picture: so a triangle showing us its front comes out with
+        // *negative* area here. Zero means it's seen exactly edge-on.
+        const float area = edgeFunction(a, b, c.x, c.y);
+        if (area == 0.0f) continue;
+        const bool backFacing = area > 0.0f;
+        if (backFacing && !settings.twoSided) continue; // back-face culling
+
         // The face normal: cross two edges of the triangle. With corners in
         // counter-clockwise order, it points out of the front of the face.
+        // When we're looking at the back, the surface we see faces the other
+        // way, so light it using the reversed normal.
         const Vec3& pa = world[t.a];
-        const Vec3 normal = normalize(cross(world[t.b] - pa, world[t.c] - pa));
+        Vec3 normal = normalize(cross(world[t.b] - pa, world[t.c] - pa));
+        if (backFacing) normal = -normal;
 
         // Lambert's cosine law: a surface facing the light head-on gets full
         // light, and it falls off with the cosine of the angle (the dot
@@ -188,7 +194,8 @@ int drawShaded(Framebuffer& fb, const Mesh& mesh, const Mat4& model,
         const float diffuse = std::max(0.0f, dot(normal, lightDir));
         const float intensity = kAmbient + (1.0f - kAmbient) * diffuse;
 
-        if (fillTriangle(fb, a, b, c, shade(baseColor, intensity))) ++drawn;
+        fillTriangle(fb, a, b, c, area, shade(settings.baseColor, intensity));
+        ++drawn;
     }
     return drawn;
 }

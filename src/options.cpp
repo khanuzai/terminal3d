@@ -114,6 +114,9 @@ Options parseOptions(int argc, const char* const* argv) {
         else if (name == "--ascii")           { noValue(); opts.mode = OutputMode::Ascii; }
         else if (name == "--light")           { noValue(); opts.lightBackground = true; }
         else if (name == "--wireframe")       { noValue(); opts.wireframe = true; }
+        else if (name == "--two-sided")       { noValue(); opts.faces = FaceMode::TwoSided; }
+        else if (name == "--one-sided")       { noValue(); opts.faces = FaceMode::OneSided; }
+        else if (name == "--flip")            { noValue(); opts.flip = true; }
         else if (name == "--color")           opts.color = parseColor(name, value());
         else if (name == "--fps")             opts.fps = parseInt(name, value(), 1, 120);
         else if (name == "--spin")            opts.spinSpeed = parseFloat(name, value(), -10.0f, 10.0f);
@@ -146,6 +149,11 @@ std::string usageText() {
         "  --fps N          target frame rate, 1 to 120 (default 30)\n"
         "  --spin SPEED     radians per second, -10 to 10; 0 = still (default 0.8)\n"
         "  --wireframe      start in wireframe mode\n"
+        "  --two-sided      always draw the backs of triangles (default: only for\n"
+        "                   meshes with holes, where you can see inside)\n"
+        "  --one-sided      never draw the backs of triangles\n"
+        "  --flip           reverse which side of each triangle is the front; closed\n"
+        "                   meshes are already fixed automatically\n"
         "  -h, --help       show this help and exit\n"
         "\n"
         "controls:\n"
