@@ -13,7 +13,6 @@ constexpr float kCellAspect = 2.0f;  // a cell is about twice as tall as wide
 constexpr float kMinZoom = 0.3f;
 constexpr float kMaxZoom = 8.0f;
 constexpr float kMaxPitch = 1.5f;    // just under 90 degrees, so the model never flips over
-constexpr float kSpinSpeed = 0.8f;   // radians per second
 constexpr float kTwoPi = 6.28318531f;
 
 } // namespace
@@ -78,6 +77,6 @@ void advanceView(ViewState& view, float dt) {
     // Hold still while being dragged, so the model follows the mouse exactly.
     if (view.autoSpin && !view.dragging) {
         // Keep yaw within one turn; floats lose precision as numbers grow.
-        view.yaw = std::fmod(view.yaw + kSpinSpeed * dt, kTwoPi);
+        view.yaw = std::fmod(view.yaw + view.spinSpeed * dt, kTwoPi);
     }
 }

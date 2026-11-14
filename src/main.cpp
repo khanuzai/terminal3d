@@ -3,6 +3,7 @@
 #include <cmath>
 #include <exception>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -11,21 +12,18 @@
 #include "framebuffer.h"
 #include "input.h"
 #include "obj_loader.h"
+#include "options.h"
 #include "renderer.h"
 #include "terminal.h"
 
 namespace {
 
-constexpr int kTargetFps = 30;
 constexpr float kFovY = 60.0f * 3.14159265f / 180.0f; // vertical field of view at zoom 1
 
 // Direction toward the light in world space: up, to the left, and in front of
 // the model (the camera is on the +z side). It stays fixed while the model
 // spins, so you can watch each face brighten and dim as it turns.
 constexpr Vec3 kToLight{-0.5f, 0.8f, 1.0f};
-
-// The model's color when fully lit: a warm orange.
-constexpr Color kModelColor{255, 150, 60};
 
 // Everything that depends on the terminal's size. Rebuilt when the window is resized.
 struct Viewport {
@@ -34,8 +32,8 @@ struct Viewport {
     float distance; // how far back the camera sits so the whole model fits
 };
 
-Viewport makeViewport(const TermSize& size, OutputMode mode) {
-    Framebuffer fb(size.cols, size.rows, mode);
+Viewport makeViewport(const TermSize& size, const Options& opts) {
+    Framebuffer fb(size.cols, size.rows, opts.mode, opts.lightBackground);
 
     // The image is width x height pixels, and each pixel is pixelAspect times
     // taller than wide. So in real, visible proportions the image is `width`
@@ -63,24 +61,30 @@ Mat4 viewProjection(const Viewport& vp, float zoom) {
 } // namespace
 
 int main(int argc, char** argv) {
-    // Proper option parsing comes in a later step; for now there's one optional flag.
-    const bool asciiFlag = argc == 3 && std::string(argv[2]) == "--ascii";
-    if (argc != 2 && !asciiFlag) {
-        std::cerr << "usage: " << argv[0] << " <model.obj> [--ascii]\n";
-        return 1;
+    Options opts;
+    try {
+        opts = parseOptions(argc, argv);
+    } catch (const std::invalid_argument& e) {
+        // Exit code 2 is the convention for "you called me wrong".
+        std::cerr << "term3d: " << e.what() << "\n"
+                  << "Try 'term3d --help' for more information.\n";
+        return 2;
     }
-    const OutputMode mode = asciiFlag ? OutputMode::Ascii : OutputMode::HalfBlock;
+    if (opts.showHelp) {
+        std::cout << usageText();
+        return 0;
+    }
 
     Mesh mesh;
     try {
-        mesh = loadObj(argv[1]);
+        mesh = loadObj(opts.modelPath);
     } catch (const std::exception& e) {
-        std::cerr << "error: " << e.what() << "\n";
+        std::cerr << "term3d: " << e.what() << "\n";
         return 1;
     }
 
     const Mat4 fit = fitToUnitSphere(mesh);
-    const std::string info = std::string(argv[1]) + "  " +
+    const std::string info = opts.modelPath + "  " +
                              std::to_string(mesh.vertices.size()) + " vertices, " +
                              std::to_string(mesh.triangles.size()) + " triangles";
     const std::string help =
@@ -90,13 +94,16 @@ int main(int argc, char** argv) {
     // point after this ends the loop normally and the session gets restored.
     installSignalHandlers();
     TerminalSession session;
-    Viewport vp = makeViewport(terminalSize(), mode);
+    Viewport vp = makeViewport(terminalSize(), opts);
     InputReader input;
+
     ViewState view;
+    view.spinSpeed = opts.spinSpeed;
+    view.wireframe = opts.wireframe;
 
     using Clock = std::chrono::steady_clock;
     const auto frameDuration = std::chrono::duration_cast<Clock::duration>(
-        std::chrono::duration<double>(1.0 / kTargetFps));
+        std::chrono::duration<double>(1.0 / opts.fps));
     const auto start = Clock::now();
     auto nextFrame = start;
     auto lastFrame = start;
@@ -120,13 +127,13 @@ int main(int argc, char** argv) {
         // been resized while we were stopped, so start from its current size.
         if (consumeContinue()) {
             session.enter();
-            vp = makeViewport(terminalSize(), mode);
+            vp = makeViewport(terminalSize(), opts);
             fpsWindowStart = Clock::now();
             framesInWindow = 0;
         }
 
         if (consumeResize()) {
-            vp = makeViewport(terminalSize(), mode);
+            vp = makeViewport(terminalSize(), opts);
             clearTerminal();
         }
 
@@ -157,15 +164,16 @@ int main(int argc, char** argv) {
         vp.fb.clear();
         std::string status = info;
         if (view.wireframe) {
-            drawWireframe(vp.fb, mesh, vpMatrix * model, kModelColor);
+            drawWireframe(vp.fb, mesh, vpMatrix * model, opts.color);
             status += ", wireframe";
         } else {
-            const int drawn = drawShaded(vp.fb, mesh, model, vpMatrix, kToLight, kModelColor);
+            const int drawn = drawShaded(vp.fb, mesh, model, vpMatrix, kToLight, opts.color);
             status += ", " + std::to_string(drawn) + " drawn";
         }
         vp.fb.drawText(1, 0, status);
         vp.fb.drawText(1, vp.fb.rows() - 1,
                        (fps > 0 ? std::to_string(fps) : std::string("--")) + " fps   " + help);
+
         // If the frame can't be written, the terminal is gone (for example its
         // window was closed): there's nobody left to draw for, so stop.
         if (!presentFrame(vp.fb.toAnsi())) break;

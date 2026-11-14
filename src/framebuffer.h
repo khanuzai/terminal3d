@@ -36,8 +36,9 @@ enum class OutputMode {
 class Framebuffer {
 public:
     // cols and rows are the terminal size in cells. The pixel size depends
-    // on the output mode.
-    Framebuffer(int cols, int rows, OutputMode mode);
+    // on the output mode. lightBackground reverses the ASCII brightness ramp,
+    // because on a light background, more ink looks darker, not brighter.
+    Framebuffer(int cols, int rows, OutputMode mode, bool lightBackground = false);
 
     // Size in pixels: what the 3D renderer draws into.
     int width() const { return width_; }
@@ -77,6 +78,7 @@ private:
     }
 
     OutputMode mode_;
+    bool lightBackground_;
     int cols_;
     int rows_;
     int width_;

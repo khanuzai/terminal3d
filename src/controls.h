@@ -8,6 +8,7 @@ struct ViewState {
     float pitch = 0.4f;     // tilt toward the camera, in radians
     float zoom = 1.0f;      // > 1 magnifies, < 1 shrinks
     bool autoSpin = true;   // keep turning on its own
+    float spinSpeed = 0.8f; // radians per second; negative spins the other way
     bool wireframe = false; // draw edges instead of shaded triangles
 
     // A mouse drag in progress, and the cell the mouse was last seen at.

@@ -17,11 +17,11 @@ constexpr const char* kLowerHalf = "\xE2\x96\x84"; // ▄
 constexpr char kShadeRamp[] = ".:-=+*#%@";
 constexpr int kShadeLevels = sizeof(kShadeRamp) - 1; // minus the '\0'
 
-char shadeChar(const Color& c) {
+char shadeChar(const Color& c, bool lightBackground) {
     // The brightest channel works as "how lit is this pixel" for any hue.
     const int brightest = std::max({c.r, c.g, c.b});
     const int level = brightest * kShadeLevels / 256;
-    return kShadeRamp[level];
+    return kShadeRamp[lightBackground ? kShadeLevels - 1 - level : level];
 }
 
 // Appends ANSI color codes to a string, remembering which colors are already
@@ -81,8 +81,9 @@ private:
 
 } // namespace
 
-Framebuffer::Framebuffer(int cols, int rows, OutputMode mode)
+Framebuffer::Framebuffer(int cols, int rows, OutputMode mode, bool lightBackground)
     : mode_(mode),
+      lightBackground_(lightBackground),
       cols_(std::max(cols, 0)),
       rows_(std::max(rows, 0)),
       width_(cols_),
@@ -154,7 +155,7 @@ std::string Framebuffer::toAnsi() const {
                 color.defaultBackground();
                 if (covered_[i]) {
                     color.foreground(colors_[i]);
-                    out += shadeChar(colors_[i]);
+                    out += shadeChar(colors_[i], lightBackground_);
                 } else {
                     out += ' ';
                 }
