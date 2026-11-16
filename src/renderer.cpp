@@ -56,6 +56,15 @@ std::vector<ScreenPoint> projectVertices(const std::vector<Vec3>& positions, con
 // Without it, those surfaces would all be black.
 constexpr float kAmbient = 0.15f;
 
+// How brightly a surface with unit normal `normal` is lit, from 0 to 1.
+// Lambert's cosine law: a surface facing the light head-on gets full light,
+// and it falls off with the cosine of the angle (the dot product of two unit
+// vectors). Facing away (negative) means no direct light, only ambient.
+float lightIntensity(const Vec3& normal, const Vec3& lightDir) {
+    const float diffuse = std::max(0.0f, dot(normal, lightDir));
+    return kAmbient + (1.0f - kAmbient) * diffuse;
+}
+
 // Scales a color by a brightness from 0 to 1.
 Color shade(const Color& base, float intensity) {
     auto channel = [intensity](std::uint8_t v) {
@@ -75,8 +84,11 @@ float edgeFunction(const ScreenPoint& a, const ScreenPoint& b, float px, float p
 // Fills one triangle into the framebuffer, depth-tested. `area` is the
 // triangle's signed area from edgeFunction(a, b, c), and must not be zero.
 // Either sign works, so this draws front and back faces alike.
+// `intensity` holds the brightness at corners a, b and c; each pixel gets a
+// blend of the three. For flat shading, pass the same value three times.
 void fillTriangle(Framebuffer& fb, const ScreenPoint& a, const ScreenPoint& b,
-                  const ScreenPoint& c, float area, const Color& color) {
+                  const ScreenPoint& c, float area, const float intensity[3],
+                  const Color& baseColor) {
     // Only test pixels inside the triangle's bounding box, clamped to the screen.
     const int minX = std::max(0, static_cast<int>(std::floor(std::min({a.x, b.x, c.x}))));
     const int maxX = std::min(fb.width() - 1, static_cast<int>(std::floor(std::max({a.x, b.x, c.x}))));
@@ -104,7 +116,13 @@ void fillTriangle(Framebuffer& fb, const ScreenPoint& a, const ScreenPoint& b,
             // divide by w, depth changes linearly across the screen, so this
             // simple blend gives the exact depth at this point.
             const float z = w0 * a.z + w1 * b.z + w2 * c.z;
-            fb.setPixelIfCloser(x, y, z, color);
+
+            // The same blend gives the brightness here. (Strictly, a value
+            // like this should be blended in 3D, not on screen, to be
+            // "perspective-correct". On triangles this small the
+            // difference can't be seen, so we keep it simple.)
+            const float lit = w0 * intensity[0] + w1 * intensity[1] + w2 * intensity[2];
+            fb.setPixelIfCloser(x, y, z, shade(baseColor, lit));
         }
     }
 }
@@ -163,9 +181,11 @@ int drawShaded(Framebuffer& fb, const Mesh& mesh, const Mat4& model,
         projectVertices(world, viewProjection, fb.width(), fb.height());
 
     const Vec3 lightDir = normalize(settings.toLight);
+    const bool smooth = settings.smooth && mesh.cornerNormals.size() == mesh.triangles.size() * 3;
 
     int drawn = 0;
-    for (const Triangle& t : mesh.triangles) {
+    for (std::size_t i = 0; i < mesh.triangles.size(); ++i) {
+        const Triangle& t = mesh.triangles[i];
         const ScreenPoint& a = points[t.a];
         const ScreenPoint& b = points[t.b];
         const ScreenPoint& c = points[t.c];
@@ -180,21 +200,28 @@ int drawShaded(Framebuffer& fb, const Mesh& mesh, const Mat4& model,
         const bool backFacing = area > 0.0f;
         if (backFacing && !settings.twoSided) continue; // back-face culling
 
-        // The face normal: cross two edges of the triangle. With corners in
-        // counter-clockwise order, it points out of the front of the face.
-        // When we're looking at the back, the surface we see faces the other
-        // way, so light it using the reversed normal.
-        const Vec3& pa = world[t.a];
-        Vec3 normal = normalize(cross(world[t.b] - pa, world[t.c] - pa));
-        if (backFacing) normal = -normal;
+        // When we're looking at a triangle's back, the surface we see faces
+        // the other way, so it's lit using reversed normals.
+        const float side = backFacing ? -1.0f : 1.0f;
 
-        // Lambert's cosine law: a surface facing the light head-on gets full
-        // light, and it falls off with the cosine of the angle (the dot
-        // product of two unit vectors). Facing away (negative) means no light.
-        const float diffuse = std::max(0.0f, dot(normal, lightDir));
-        const float intensity = kAmbient + (1.0f - kAmbient) * diffuse;
+        float intensity[3];
+        if (smooth) {
+            // Gouraud shading: light each corner with its own normal, turned
+            // into world space the same way the model is.
+            for (int k = 0; k < 3; ++k) {
+                const Vec3& n = mesh.cornerNormals[3 * i + k];
+                intensity[k] = lightIntensity(normalize(model.transformDirection(n)) * side, lightDir);
+            }
+        } else {
+            // Flat shading: the face normal, from the cross product of two
+            // edges. With corners in counter-clockwise order, it points out
+            // of the front of the face.
+            const Vec3& pa = world[t.a];
+            const Vec3 normal = normalize(cross(world[t.b] - pa, world[t.c] - pa)) * side;
+            intensity[0] = intensity[1] = intensity[2] = lightIntensity(normal, lightDir);
+        }
 
-        fillTriangle(fb, a, b, c, area, shade(settings.baseColor, intensity));
+        fillTriangle(fb, a, b, c, area, intensity, settings.baseColor);
         ++drawn;
     }
     return drawn;

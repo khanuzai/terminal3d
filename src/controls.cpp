@@ -55,6 +55,7 @@ bool applyInput(ViewState& view, const InputEvent& event) {
                 case '-': case '_': view.zoom /= kZoomStep; break;
                 case ' ': view.autoSpin = !view.autoSpin; break;
                 case 'w': case 'W': view.wireframe = !view.wireframe; break;
+                case 's': case 'S': view.smooth = !view.smooth; break;
                 case 'r': case 'R': {
                     // Reset where we're looking from, but keep the display settings.
                     const ViewState defaults;

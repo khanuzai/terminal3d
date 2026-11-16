@@ -22,6 +22,8 @@ struct Options {
     bool wireframe = false;
     FaceMode faces = FaceMode::Auto;
     bool flip = false;            // reverse every triangle's winding after loading
+    bool smooth = true;           // smooth (Gouraud) shading; false = flat
+    float creaseAngle = 60.0f;    // degrees; sharper edges than this stay sharp
     bool showHelp = false;
 };
 

@@ -161,6 +161,19 @@ struct Mat4 {
         };
     }
 
+    // Transforms a direction (w = 0): rotation and scale apply, but
+    // translation doesn't, because a direction has no position. For normals
+    // this is only right when the scale is the same on every axis, as in our
+    // model matrix; otherwise they'd need the "normal matrix" (the inverse
+    // transpose) to stay perpendicular to the surface.
+    Vec3 transformDirection(const Vec3& d) const {
+        return {
+            m[0][0] * d.x + m[0][1] * d.y + m[0][2] * d.z,
+            m[1][0] * d.x + m[1][1] * d.y + m[1][2] * d.z,
+            m[2][0] * d.x + m[2][1] * d.y + m[2][2] * d.z,
+        };
+    }
+
     Vec4 operator*(const Vec4& v) const {
         return {
             m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z + m[0][3] * v.w,

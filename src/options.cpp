@@ -117,6 +117,8 @@ Options parseOptions(int argc, const char* const* argv) {
         else if (name == "--two-sided")       { noValue(); opts.faces = FaceMode::TwoSided; }
         else if (name == "--one-sided")       { noValue(); opts.faces = FaceMode::OneSided; }
         else if (name == "--flip")            { noValue(); opts.flip = true; }
+        else if (name == "--flat")            { noValue(); opts.smooth = false; }
+        else if (name == "--crease")          opts.creaseAngle = parseFloat(name, value(), 0.0f, 180.0f);
         else if (name == "--color")           opts.color = parseColor(name, value());
         else if (name == "--fps")             opts.fps = parseInt(name, value(), 1, 120);
         else if (name == "--spin")            opts.spinSpeed = parseFloat(name, value(), -10.0f, 10.0f);
@@ -154,10 +156,14 @@ std::string usageText() {
         "  --one-sided      never draw the backs of triangles\n"
         "  --flip           reverse which side of each triangle is the front; closed\n"
         "                   meshes are already fixed automatically\n"
+        "  --flat           start with flat shading instead of smooth\n"
+        "  --crease DEG     smooth shading keeps edges sharper than this angle sharp,\n"
+        "                   0 to 180 (default 60)\n"
         "  -h, --help       show this help and exit\n"
         "\n"
         "controls:\n"
         "  drag, arrow keys   rotate          scroll, + -   zoom\n"
         "  space              pause the spin  w             wireframe on/off\n"
-        "  r                  reset the view  q, Esc        quit\n";
+        "  s                  smooth/flat     r             reset the view\n"
+        "  q, Esc             quit\n";
 }

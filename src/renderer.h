@@ -22,6 +22,12 @@ struct ShadeSettings {
     //        Needed for open meshes, where you can see through holes to the
     //        inside surface.
     bool twoSided = false;
+
+    // false: flat shading, one brightness per triangle from its face normal.
+    // true:  smooth (Gouraud) shading: brightness is computed at each corner
+    //        from mesh.cornerNormals and blended across the triangle. Falls
+    //        back to flat if the mesh has no corner normals.
+    bool smooth = false;
 };
 
 // Draws the mesh as solid, lit triangles.

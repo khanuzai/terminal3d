@@ -96,6 +96,10 @@ int main(int argc, char** argv) {
         autoFlipped = true;
     }
 
+    // Smooth-shading normals depend on which way the triangles face, so
+    // they're computed after the winding is settled.
+    computeCornerNormals(mesh, opts.creaseAngle * 3.14159265f / 180.0f);
+
     ShadeSettings shading;
     shading.toLight = kToLight;
     shading.baseColor = opts.color;
@@ -109,7 +113,7 @@ int main(int argc, char** argv) {
         (closed ? "closed" : "open") + (autoFlipped ? " (was inside-out, fixed)" : "") +
         (opts.flip ? ", flipped" : "") + (shading.twoSided ? ", two-sided" : "");
     const std::string help =
-        "drag/arrows rotate  scroll/+- zoom  space spin  w wireframe  r reset  q quit";
+        "drag/arrows rotate  scroll/+- zoom  space spin  w wireframe  s smooth  r reset  q quit";
 
     // Install the handlers before touching the terminal, so a Ctrl+C at any
     // point after this ends the loop normally and the session gets restored.
@@ -121,6 +125,7 @@ int main(int argc, char** argv) {
     ViewState view;
     view.spinSpeed = opts.spinSpeed;
     view.wireframe = opts.wireframe;
+    view.smooth = opts.smooth;
 
     using Clock = std::chrono::steady_clock;
     const auto frameDuration = std::chrono::duration_cast<Clock::duration>(
@@ -188,8 +193,10 @@ int main(int argc, char** argv) {
             drawWireframe(vp.fb, mesh, vpMatrix * model, opts.color);
             status += ", wireframe";
         } else {
+            shading.smooth = view.smooth;
             const int drawn = drawShaded(vp.fb, mesh, model, vpMatrix, shading);
-            status += ", " + std::to_string(drawn) + " drawn";
+            status += std::string(view.smooth ? ", smooth" : ", flat") + ", " +
+                      std::to_string(drawn) + " drawn";
         }
         vp.fb.drawText(1, 0, status);
         vp.fb.drawText(1, vp.fb.rows() - 1,

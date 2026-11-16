@@ -1,7 +1,10 @@
 #include "mesh.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
+#include <map>
 #include <unordered_map>
 #include <utility>
 
@@ -75,4 +78,77 @@ double signedVolume(const Mesh& mesh) {
 void flipWinding(Mesh& mesh) {
     // Swapping two corners reverses the direction around the triangle.
     for (Triangle& t : mesh.triangles) std::swap(t.b, t.c);
+    mesh.cornerNormals.clear();
+}
+
+void computeCornerNormals(Mesh& mesh, float creaseAngle) {
+    const std::size_t faceCount = mesh.triangles.size();
+
+    // Each face's unit normal, and the angle the face makes at each of its
+    // three corners. When averaging normals at a point, each face is weighted
+    // by its angle there. That makes the result independent of how polygons
+    // were split into triangles: a square split in two contributes 45 + 45
+    // degrees at a corner the triangles share, the same 90 degrees as the
+    // unsplit square. (Weighting by area instead would count that square
+    // twice there.)
+    std::vector<Vec3> unit(faceCount);
+    std::vector<std::array<float, 3>> cornerAngle(faceCount);
+    for (std::size_t f = 0; f < faceCount; ++f) {
+        const Triangle& t = mesh.triangles[f];
+        const Vec3 p[3] = {mesh.vertices[t.a], mesh.vertices[t.b], mesh.vertices[t.c]};
+        unit[f] = normalize(cross(p[1] - p[0], p[2] - p[0]));
+        for (int k = 0; k < 3; ++k) {
+            const Vec3 toNext = normalize(p[(k + 1) % 3] - p[k]);
+            const Vec3 toPrev = normalize(p[(k + 2) % 3] - p[k]);
+            cornerAngle[f][k] = std::acos(std::clamp(dot(toNext, toPrev), -1.0f, 1.0f));
+        }
+    }
+
+    // Group vertices by position. Some models store one corner several times
+    // (the teapot does, where its curved patches meet). For smoothing, those
+    // copies have to count as one point, or every seam shows as a crease.
+    std::map<std::array<float, 3>, int> positionIds;
+    std::vector<int> positionOf(mesh.vertices.size());
+    for (std::size_t v = 0; v < mesh.vertices.size(); ++v) {
+        const Vec3& p = mesh.vertices[v];
+        const int nextId = static_cast<int>(positionIds.size());
+        positionOf[v] = positionIds.emplace(std::array<float, 3>{p.x, p.y, p.z}, nextId).first->second;
+    }
+
+    // For each position, the faces that touch it, and at which of their
+    // corners (0, 1 or 2), so we can look up the angle there.
+    struct FaceCorner {
+        int face;
+        int corner;
+    };
+    std::vector<std::vector<FaceCorner>> facesAt(positionIds.size());
+    for (std::size_t f = 0; f < faceCount; ++f) {
+        const Triangle& t = mesh.triangles[f];
+        const int corners[3] = {t.a, t.b, t.c};
+        for (int k = 0; k < 3; ++k) {
+            facesAt[positionOf[corners[k]]].push_back({static_cast<int>(f), k});
+        }
+    }
+
+    // Two faces are on the same smooth surface if the angle between their
+    // normals is at most creaseAngle, i.e. the cosine (their dot product) is
+    // at least cos(creaseAngle).
+    const float minCos = std::cos(creaseAngle);
+
+    mesh.cornerNormals.assign(faceCount * 3, Vec3{});
+    for (std::size_t f = 0; f < faceCount; ++f) {
+        const Triangle& t = mesh.triangles[f];
+        const int corners[3] = {t.a, t.b, t.c};
+        for (int k = 0; k < 3; ++k) {
+            Vec3 sum;
+            for (const FaceCorner& fc : facesAt[positionOf[corners[k]]]) {
+                if (dot(unit[f], unit[fc.face]) >= minCos) {
+                    sum += unit[fc.face] * cornerAngle[fc.face][fc.corner];
+                }
+            }
+            // If everything cancelled out (or the face has no area), fall
+            // back to the face's own normal.
+            mesh.cornerNormals[3 * f + k] = length(sum) > 0.0f ? normalize(sum) : unit[f];
+        }
+    }
 }
