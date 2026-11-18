@@ -1,0 +1,49 @@
+# Builds term3d and runs the unit tests on every push and pull request.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Let every job finish even if one fails, to see whether a problem is
+      # specific to one platform.
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux (GCC)
+            os: ubuntu-latest
+            build_type: Release
+          - name: macOS (Clang)
+            os: macos-latest
+            build_type: Release
+          # A debug build with sanitizers, which stop the tests on memory
+          # errors (reading past the end of a buffer, use after free) and
+          # undefined behavior (signed overflow, bad shifts) that might
+          # otherwise go unnoticed.
+          - name: Linux (sanitizers)
+            os: ubuntu-latest
+            build_type: Debug
+            cxx_flags: -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Warnings are errors here, so a warning can't slip into the repository
+      # unnoticed. Locally they stay warnings, so they don't block you mid-edit.
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+          "-DCMAKE_CXX_FLAGS=${{ matrix.cxx_flags }}"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
