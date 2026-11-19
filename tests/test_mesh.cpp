@@ -145,8 +145,8 @@ TEST(mesh_flip_clears_stale_normals) {
 
 #ifdef TERM3D_MODELS_DIR
 // The models shipped in the repository load, and are closed and right side out.
-TEST(mesh_shipped_cube_and_torus_are_closed_and_outward) {
-    for (const char* name : {"cube.obj", "torus.obj"}) {
+TEST(mesh_shipped_closed_models_are_closed_and_outward) {
+    for (const char* name : {"cube.obj", "torus.obj", "spot.obj"}) {
         const Mesh mesh = loadObj(std::string(TERM3D_MODELS_DIR) + "/" + name);
         CHECK(isClosed(mesh));
         CHECK(signedVolume(mesh) > 0.0);
