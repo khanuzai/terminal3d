@@ -1,4 +1,4 @@
-# term3d
+# terminal3d
 
 [![CI](https://github.com/khanuzai/term3d/actions/workflows/ci.yml/badge.svg)](https://github.com/khanuzai/term3d/actions/workflows/ci.yml)
 
